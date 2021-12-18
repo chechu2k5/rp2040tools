@@ -30,6 +30,26 @@ func PrintVerbose(a ...interface{}) {
 	}
 }
 
+func executeCommand(verbose_description string, command []string, print_output bool, show_spinner bool, fatal bool) error {
+
+	if verbose_description != "" {
+		PrintVerbose(verbose_description)
+	}
+
+	err, _, exe_output := launchCommandAndWaitForOutput(command, print_output, show_spinner)
+
+	if err != nil {
+		if fatal {
+			PrintlnVerbose(exe_output)
+			os.Exit(1)
+		}
+	} else if verbose_description != "" {
+		PrintlnVerbose(" OK")
+	}
+
+	return err
+}
+
 func main() {
 	name := filepath.Base(os.Args[0])
 	path, _ := filepath.Abs(filepath.Dir(os.Args[0]))
@@ -38,32 +58,24 @@ func main() {
 	PrintlnVerbose(name + " " + version + " - compiled with " + runtime.Version())
 
 	convert := []string{filepath.Join(path, "elf2uf2"), *binary, *binary + ".uf2"}
-	launchCommandAndWaitForOutput(convert, false, false)
+
+	executeCommand("Converting elf to uf2 ...", convert, false, false, true)
 
 	info := []string{filepath.Join(path, "picotool"), "info"}
-	err, _, _ := launchCommandAndWaitForOutput(info, false, true)
-	for i := 0; i < 20 && err != nil; i++ {
-		err, _, _ = launchCommandAndWaitForOutput(info, false, true)
+	err := executeCommand("Looking for RP2040 device in BOOTSEL mode ", info, false, true, false)
+
+	max_attempts := 20
+
+	for i := 0; i < max_attempts && err != nil; i++ {
 		time.Sleep(500 * time.Millisecond)
-	}
-	if err != nil {
-		fmt.Println("")
-		os.Exit(1)
+		err = executeCommand("", info, false, true, i == (max_attempts-1))
 	}
 
 	load := []string{filepath.Join(path, "picotool"), "load", *binary + ".uf2"}
-	err, _, _ = launchCommandAndWaitForOutput(load, true, false)
-	if err != nil {
-		fmt.Println("")
-		os.Exit(1)
-	}
+	executeCommand("", load, true, false, true)
 
 	reboot := []string{filepath.Join(path, "picotool"), "reboot"}
-	err, _, _ = launchCommandAndWaitForOutput(reboot, false, false)
-	if err != nil {
-		fmt.Println("")
-		os.Exit(1)
-	}
+	executeCommand("Rebooting RP2040 device ...", reboot, false, false, true)
 
 	fmt.Println("")
 	os.Exit(0)
@@ -81,6 +93,9 @@ func launchCommandAndWaitForOutput(command []string, print_output bool, show_spi
 		oscmd.Stderr = os.Stderr
 	}
 	err := oscmd.Start()
+	if err != nil {
+		return err, false, ""
+	}
 	in := bufio.NewScanner(multi)
 	in.Split(bufio.ScanRunes)
 	found := false
@@ -98,11 +113,4 @@ func launchCommandAndWaitForOutput(command []string, print_output bool, show_spi
 	}
 	err = oscmd.Wait()
 	return err, found, out
-}
-
-func launchCommandBackground(command []string) (error, bool) {
-	oscmd := exec.Command(command[0], command[1:]...)
-	tellCommandNotToSpawnShell(oscmd)
-	err := oscmd.Start()
-	return err, false
 }
